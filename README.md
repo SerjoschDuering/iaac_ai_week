@@ -8,7 +8,7 @@
 
 ## THE ARC (in 5 sentences)
 
-On Monday, students land in a startup that just signed its first client: check buildings against regulations. They get their hands dirty -- open IFC files, write a check function, see results in 3D. On Tuesday, the board demands speed and standards: teams add AI to their tools, agree on a shared data format, and start building agents that reason about compliance. On Wednesday, the board drops the bomb -- "the investor demo is Friday, we need a real product" -- and captains step up to design a unified platform while teams race to connect their pieces. Thursday is the integration sprint: everything comes together, gets deployed, and the startup rehearses its pitch. Friday, they present to "investors."
+On Monday, students land in a startup that just signed its first client: check buildings against regulations. They get their hands dirty -- open IFC files, write a check function, see results in 3D. On Tuesday, the board demands speed and standards: teams add AI to their tools, agree on a shared data format, and build agents that reason about compliance. On Wednesday, teams deploy their agents to the cloud (HF Spaces), learn about RAG so agents can look up regulations themselves, and the board drops the bomb -- "we need one unified product by Friday." Captains step up to design the platform architecture. Thursday is the integration sprint: frontend, orchestrator, and team agents all connect, the startup rehearses its pitch. Friday, they present to "investors."
 
 ---
 
@@ -17,10 +17,10 @@ On Monday, students land in a startup that just signed its first client: check b
 Students are a startup. They don't follow a syllabus -- they respond to escalating demands from "the board" (instructors). Complexity grows organically:
 
 ```
-Mon: Write a function         → "Here's a regulation, can you check it?"
-Tue: Make it smarter with AI  → "We need to scale this, agree on standards"
-Wed: Connect the pieces       → "The client wants a real product"
-Thu: Ship it                  → "Investors are coming Friday"
+Mon: Write a function           → "Here's a regulation, can you check it?"
+Tue: Make it smarter with AI    → "We need to scale this, agree on standards"
+Wed: Deploy it + RAG + platform → "The client wants a real product, online"
+Thu: Integrate everything       → "Investors are coming Friday"
 ```
 
 **Three engines drive the week:**
@@ -42,6 +42,64 @@ Thu: Ship it                  → "Investors are coming Friday"
 
 ---
 
+## DEPLOYMENT ARCHITECTURE
+
+Each team works in their **own GitHub repository** (cloned from a template). The final platform connects everything:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  USER (Browser)                                                  │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌──────────────────────┐                                        │
+│  │  CLOUDFLARE PAGES    │  ← Frontend: dashboard + 3D viewer    │
+│  │  (Captains build)    │     + file upload UI                   │
+│  └──────┬───────────────┘                                        │
+│         │                                                        │
+│    ┌────┴────┐  ┌───────────────┐  ┌────────────────────┐       │
+│    │  R2     │  │  D1 Database  │  │  Auth (Turnstile)  │       │
+│    │  (S3)   │  │  (results)    │  └────────────────────┘       │
+│    │  IFC    │  └──────▲────────┘                                │
+│    │  files  │         │ results                                 │
+│    └────┬────┘         │                                         │
+│         │       ┌──────┴──────────────────────────────────┐      │
+│         │       │  ORCHESTRATOR HF SPACE (Captains)       │      │
+│         │       │  PydanticAI -- calls team agents as     │      │
+│    IFC  │       │  sub-agents / tools, aggregates results │      │
+│    URL  │       └──────┬──────────┬──────────┬────────────┘      │
+│         │              │          │          │                    │
+│         │       ┌──────┴───┬──────┴───┬──────┴───┐               │
+│         │       │ Team A   │ Team B   │ Team C   │  ...          │
+│         ├──────►│ HF Space │ HF Space │ HF Space │               │
+│         │       │ Gradio + │ Gradio + │ Gradio + │               │
+│         │       │ Checks + │ Checks + │ RAG +    │               │
+│         │       │ ifcopen  │ ifcopen  │ Checks + │               │
+│         │       │ shell    │ shell    │ ifcopen  │               │
+│         │       └──────────┴──────────┴──────────┘               │
+│                                                                  │
+│  ── Cloudflare (Captains) ──    ── HF Spaces (Teams + Capt.) ── │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Flow:** User uploads IFC → stored in R2 (S3) → frontend calls the **orchestrator** HF Space → orchestrator calls each team's HF Space with the IFC file URL → team Spaces download IFC, run checks with ifcopenshell + PydanticAI → results flow back to orchestrator → stored in D1 → frontend displays.
+
+**Why this split:**
+- **Cloudflare** (Pages, R2, D1): free, fast, great for frontend + storage + static stuff. No heavy Python here.
+- **HF Spaces** (Gradio): free, supports ifcopenshell + PydanticAI + LLM calls. The heavy Python (ifcopenshell, PydanticAI, LLM API calls) all lives here. Students keep their deployments after the course.
+- The **orchestrator** is also an HF Space because it may need ifcopenshell too, and PydanticAI needs Python. Cloudflare Workers can't run ifcopenshell.
+- Not production-efficient (IFC downloaded per request), but simple and teachable for a one-week course.
+
+| Component | Service | Who Owns It | When Built |
+|-----------|---------|-------------|------------|
+| Frontend + 3D viewer | Cloudflare Pages | Captains | Wed-Thu |
+| IFC file storage | Cloudflare R2 (S3-compatible) | Captains | Wed |
+| Results database | Cloudflare D1 | Captains | Wed |
+| Auth | Cloudflare Turnstile (or simple) | Captains | Thu (stretch) |
+| Check agents | HF Spaces -- one per team | Each team | Wed deploy, built Mon-Tue |
+| Main orchestrator | HF Space (PydanticAI -- needs Python) | Captains | Wed-Thu |
+
+---
+
 ## OPEN DECISIONS (must resolve before Day 1)
 
 | # | Decision | Options | Impact |
@@ -49,9 +107,8 @@ Thu: Ship it                  → "Investors are coming Friday"
 | 1 | **Do students write code manually or via AI agents?** | A) Colab/notebook first, AI agents from Day 2. B) AI agents from start. C) Hybrid. | Determines teaching approach |
 | 2 | **Which AI coding tool?** | Claude Code, Cursor, Codex CLI, or let them choose? | Setup instructions + skill compatibility |
 | 3 | **Final product teaser** | What do we show on Day 1 morning? Prototype enough or need a mockup? | Students need a north star |
-| 4 | **Shared repo structure** | Monorepo with folders per team? One repo per team? Template repo they clone? | Affects Monday afternoon setup |
-| 5 | **Who lectures what?** | Split between Serjoscha and colleague | Need to assign before Monday |
-| 6 | **Colab/notebook or local IDE from Day 1?** | Colab is zero-setup but limited. Local IDE is real but setup takes time. | Monday afternoon depends on this |
+| 4 | **Who lectures what?** | Split between Serjoscha and colleague | Need to assign before Monday |
+| 5 | **Colab/notebook or local IDE from Day 1?** | Colab is zero-setup but limited. Local IDE is real but setup takes time. | Monday afternoon depends on this |
 
 ---
 
@@ -167,59 +224,86 @@ Thu: Ship it                  → "Investors are coming Friday"
 
 ### Wednesday Feb 18 -- "Make It Connect"
 
-*Goal: Teams learn how services communicate. Captains design the platform. Integration begins.*
+*Goal: Deploy to the cloud. Introduce RAG. Captains design the unified platform. Integration begins.*
 
 #### Morning (10:30-13:30)
 
 | Time | What | Format | Notes |
 |------|------|--------|-------|
-| 10:30-11:15 | **Lecture: How Software Talks** | Lecture (45min) | APIs and endpoints -- the waiter analogy from the podcast, now concrete. REST basics (GET, POST). How a frontend calls a backend. Databases -- where do check results live? How does the frontend read them? Quick live demo: call an API endpoint, get JSON back. |
+| 10:30-11:15 | **Lecture: APIs, Endpoints & Databases** | Lecture (45min) | APIs and endpoints -- the waiter analogy from the podcast, now concrete. REST basics (GET, POST). How a frontend calls a backend. Databases -- where do check results live? How does the frontend read them? Quick live demo: call an API endpoint, get JSON back. |
 | 11:15-11:30 | Break | | |
-| 11:30-12:30 | **Exercise: Connect Something** | Hands-on | Teams take their agent/tools and expose ONE endpoint (e.g., "POST /check with an IFC file, get results back"). Or: write results to a shared database. The goal is: make your work accessible to OTHER teams, not just your laptop. |
-| 12:30-13:30 | **--- BOARD MEETING #2 ---** | All-hands | |
+| 11:30-12:15 | **Exercise: Deploy Your Agent to HF Spaces** | Hands-on (45min) | Each team deploys their Gradio app (agent + checks) to Hugging Face Spaces. `gradio deploy` -- that's it. Now their agent is live on the internet with a URL. Test it: open your teammate's Space URL, run a check. **Your laptop work is now a service other people can call.** |
+| 12:15-13:00 | **Brainstorm: "What If the Agent Could Read the Law?"** | Discussion + mini-lecture | Right now, regulations are hardcoded ("doors >= 800mm"). What if we gave the agent the actual regulation document? What would that unlock? Students brainstorm on Miro. Then: **RAG intro** (20min) -- what is retrieval augmented generation, how does it work, why it matters for compliance checking. The agent doesn't memorize rules, it *looks them up*. |
+| 13:00-13:30 | **--- BOARD MEETING #2 ---** | All-hands | |
 
 > **Board Meeting #2: "The Client Wants a Real Product"**
 >
-> **What's discussed:** "The investor demo is in 2 days. Right now we have 5 separate teams with 5 separate agents running on 5 laptops. That's not a product. We need ONE platform."
+> **What's discussed:** "The investor demo is in 2 days. Right now we have 5 separate teams with 5 separate Spaces. That's not a product. We need ONE unified platform that calls all your agents."
 >
-> **Open brainstorming (everyone):** "What features does the final product need?" Students + captains brainstorm on Miro. Ideas get clustered: 3D viewer, dashboard, multi-file support, report export, login, real-time updates, etc.
+> **Open brainstorming (everyone):** "What features does the final product need?" Students + captains brainstorm on Miro. Ideas get clustered: 3D viewer, dashboard, multi-file upload, report export, RAG over regulations, login, etc.
+>
+> **Architecture reveal:** Show the deployment architecture diagram (Cloudflare frontend + R2 storage + HF Spaces as backends). "This is how real platforms work -- a frontend, storage, and specialized services behind it."
 >
 > **What's decided:**
 > - Captains are now in **lead & organization positions** -- they own the integration plan
 > - Captains pick the top features from the brainstorm that are realistic for Thu
-> - Teams that still need to finish checks continue, but their output must flow into the platform
-> - "What tech options do we have?" Quick discussion of architecture choices (hosted API, database, frontend framework)
+> - Teams that still need to finish checks continue, but output must be deployed to their HF Space
+> - Teams that are ahead: add RAG to their agent (give it a regulation PDF to search)
 >
-> **What's seeded:** `Skill: platform-architecture` -- describes the target architecture: how services connect, where the database is, what the API looks like, how the frontend reads data. Students' AI assistants now "know" the platform structure.
+> **What's seeded:**
+> - `Skill: platform-architecture` -- describes the target architecture: Cloudflare Pages frontend, R2 for IFC storage, D1 for results, HF Spaces as agent backends, how they connect
+> - `Skill: hf-deployment` -- how to deploy and update Gradio apps on HF Spaces
+> - `Skill: rag-basics` (optional) -- how to add document retrieval to a PydanticAI agent
 
 #### Afternoon (14:30-17:30)
 
 | Time | What | Format | Notes |
 |------|------|--------|-------|
-| 14:30-15:00 | **Captains Planning Session** | Captains only | Captains meet separately. They sketch the integration plan on Miro: who builds what, what connects to what, what's the MVP for Thursday. Instructors available for guidance. |
+| 14:30-15:00 | **Captains Planning Session** | Captains only | Captains meet separately. They sketch the integration plan on Miro: who builds what, what connects to what, what's the MVP for Thursday. Instructors available for guidance. Key question: who builds the orchestrator that calls all team Spaces? |
 | 15:00-15:15 | **Captains Present the Plan** | All-hands (15min) | Captains present their integration plan to everyone. Teams get their assignments. |
 | 15:15-15:30 | Break | | |
-| 15:30-17:00 | **Sprint: Build the Platform** | Hands-on | Under captain direction: some teams keep building/refining checks + agents. Others start the frontend, database, or API layer. PRD → user stories → implement loop continues. Everything goes through the seeded skills. |
+| 15:30-17:00 | **Sprint: Build the Platform** | Hands-on | Under captain direction. Possible work streams: |
+
+> **Work streams (captain assigns):**
+> - **Frontend team**: Start building Cloudflare Pages app (dashboard, 3D viewer, file upload to R2)
+> - **Orchestrator team**: Build the main PydanticAI agent (HF Space) that calls all team Spaces as sub-agents
+> - **Check teams**: Deploy latest agent to HF Space, add more checks, or add RAG capability
+> - **Ambitious teams**: Add RAG over regulation documents to their agent
+
+| Time | What | Format | Notes |
+|------|------|--------|-------|
 | 17:00-17:30 | **Quick Status Check** | Demo round | Each captain: 2 min update. What's working, what's blocked, what's needed for tomorrow. |
 
-**Wednesday checkpoint:** Architecture is defined on Miro. At least one integration path works (e.g., check results flowing to a database, or a basic frontend loading results from an API). Captains own the plan.
+**Wednesday checkpoint:** Every team's agent is deployed to HF Spaces (live URL). Architecture is defined on Miro. Captains own the integration plan. At least one integration path is working (frontend can call an HF Space and show results).
 
 **Miro after Wednesday:**
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     PLATFORM ARCHITECTURE                       │
 │                                                                 │
-│  [Frontend]  ←→  [API Server]  ←→  [Database]                  │
-│      │                │                                         │
-│      └── 3D Viewer    ├── /check endpoint                      │
-│      └── Dashboard    ├── /results endpoint                    │
-│                       └── [Check Tools + Agents]                │
+│  Cloudflare Pages (Frontend)                                    │
+│    ├── 3D Viewer                                                │
+│    ├── Dashboard                                                │
+│    └── File Upload → R2 (S3)                                    │
+│                                                                 │
+│  Orchestrator HF Space (Captains)                               │
+│    └── Calls team Spaces as sub-agents                          │
+│                                                                 │
+│  Team HF Spaces (deployed!):                                    │
+│    ├── team-a.hf.space  (door + window checks)                  │
+│    ├── team-b.hf.space  (room + area checks)                    │
+│    ├── team-c.hf.space  (accessibility + RAG)                   │
+│    ├── team-d.hf.space  (structural checks)                     │
+│    └── team-e.hf.space  (fire safety checks)                    │
 │                                                                 │
 │  Feature Backlog:          Assigned to:                         │
-│  □ 3D viewer               Captain A's team                    │
-│  □ Results dashboard        Captain B's team                    │
-│  □ Multi-file upload        Captain C's team                    │
-│  □ Report export            Stretch goal                        │
+│  ■ Deploy all agents       All teams (DONE)                     │
+│  □ Frontend + 3D viewer    Captain A's team                     │
+│  □ Orchestrator            Captain B's team                     │
+│  □ R2 file upload          Captain C's team                     │
+│  □ RAG over regulations    Teams that are ahead                 │
+│  □ Results database (D1)   Captain D's team                     │
+│  □ Auth                    Stretch goal                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -236,8 +320,8 @@ Thu: Ship it                  → "Investors are coming Friday"
 | Time | What | Format | Notes |
 |------|------|--------|-------|
 | 10:30-10:45 | **Standup** | All-hands | Captains: 1 min each. What's the status? What's blocked? What's the plan for today? |
-| 10:45-11:00 | **Mini-lecture (if needed)** | Talk | Deployment basics, or whatever topic is most blocking. Could also be: "how to present a technical product to non-technical people." |
-| 11:00-13:30 | **Integration Sprint** | Hands-on | Connect all pieces. Captains coordinate. Instructors debug and unblock. **Teams that finish early:** pick items from the feature backlog brainstormed yesterday. This is open-ended -- ambitious teams can extend the platform. |
+| 10:45-11:15 | **Brainstorm: "How do we tell this story?"** | All-hands (30min) | Tomorrow you pitch to investors. What's the narrative? What's the demo flow? Students + captains sketch the presentation arc on Miro. This also surfaces what MUST work by end of day. |
+| 11:15-13:30 | **Integration Sprint** | Hands-on | Connect all pieces. Captains coordinate. Instructors debug and unblock. **Teams that finish early:** pick items from the feature backlog brainstormed yesterday. Open-ended -- ambitious teams extend the platform (RAG, more checks, better UI). |
 
 #### Afternoon (14:30-17:30)
 
@@ -289,8 +373,10 @@ This is the core workflow students learn and repeat:
 | **After Board Meeting #1 (Tue)** | `validation-schema` | The agreed-upon output format for all check results | Schema decision |
 | **After Board Meeting #1 (Tue)** | `ifc-check-template` | Template for writing new checks that conform to the schema | Schema decision |
 | **After Board Meeting #1 (Tue)** | `pydantic-ai-agent` | How to build a PydanticAI agent with tools | Sprint goal announcement |
-| **After Board Meeting #2 (Wed)** | `platform-architecture` | Target architecture, API endpoints, database schema, how services connect | Architecture decision |
-| **Thu (if needed)** | `deployment-guide` | How to deploy the platform, environment setup, hosting | Integration sprint |
+| **After Board Meeting #2 (Wed)** | `platform-architecture` | Target architecture: Cloudflare frontend, R2 storage, D1 database, HF Spaces as backends, how they connect | Architecture decision |
+| **After Board Meeting #2 (Wed)** | `hf-deployment` | How to deploy and update Gradio apps on HF Spaces | Deployment exercise |
+| **After Board Meeting #2 (Wed)** | `rag-basics` (optional) | How to add document retrieval to a PydanticAI agent for regulation lookup | RAG brainstorm |
+| **Thu (if needed)** | `cloudflare-deployment` | How to deploy frontend on Cloudflare Pages, set up R2, D1 | Integration sprint |
 
 ---
 
@@ -316,6 +402,7 @@ This is the core workflow students learn and repeat:
 | VS Code or Cursor installed | Need setup instructions |
 | AI coding tool set up | **DECISION NEEDED** |
 | GitHub account | Need to communicate |
+| Hugging Face account | Free -- needed for deployment on Wed |
 | Google account (for Colab, if using) | Need to communicate |
 
 ---
@@ -335,5 +422,7 @@ This is the core workflow students learn and repeat:
 | Agent Skills lecture (15min) | Tue PM | ? | ? |
 | Skill files (see seeding schedule) | Tue-Wed | ? | Need to write |
 | APIs + databases lecture | Wed AM | ? | ? |
+| RAG intro mini-lecture | Wed AM | ? | ? |
+| HF Spaces deployment guide | Wed AM | ? | ? |
 | Miro board template | Day 1 | ? | ? |
 | Presentation template | Thu PM | ? | ? |
